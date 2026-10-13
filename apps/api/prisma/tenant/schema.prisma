@@ -1,0 +1,158 @@
+// apps/api/prisma/tenant/schema.prisma
+//
+// This schema models the tables that exist inside EVERY tenant schema
+// (e.g. "zut", "unza"). It is intentionally schema-agnostic: no @@schema
+// attribute is set on any model, so Prisma emits unqualified table names
+// (e.g. `"Voter"` not `"zut"."Voter"`). The correct tenant schema is
+// selected purely by the `schema=` query parameter on the connection URL
+// used to construct each PrismaClient — see getPrismaForTenant() in
+// src/lib/tenantPrisma.ts. This lets one Prisma schema file serve an
+// unbounded number of dynamically-created tenant schemas.
+//
+// IMPORTANT: this file is never used to run `prisma migrate` against a
+// specific tenant. Tenant tables are created by the `provision_tenant`
+// stored procedure (see sql/provision_tenant.sql), which must be kept in
+// sync with the models below by hand.
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../../node_modules/.prisma/tenant-client"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Voter {
+  VoterID      String    @id @default(uuid()) @db.Uuid
+  TenantID     String    @db.Uuid
+  StudentID    String    @db.VarChar(50)
+  PasswordHash String
+  EnrolledAt   DateTime  @default(now())
+  IsActive     Boolean   @default(false)
+  MustChangePassword Boolean @default(false)
+
+  credentials    Credential[]
+  participations ElectionParticipant[]
+
+  @@unique([StudentID, TenantID])
+  @@map("Voter")
+}
+
+model Credential {
+  CredentialID          String    @id @db.VarChar(500)
+  VoterID               String    @db.Uuid
+  Salted_PublicKey_Hash String
+  // Full public key, AES-256 encrypted at rest. Needed because WebAuthn
+  // verification requires the original public key bytes; the salted hash
+  // alone (NFR-06) is an integrity check, not a reversible store.
+  Encrypted_PublicKey   String
+  SignCount             BigInt    @default(0)
+  CreatedAt             DateTime  @default(now())
+  LastUsedAt            DateTime?
+
+  voter Voter @relation(fields: [VoterID], references: [VoterID])
+
+  @@map("Credential")
+}
+
+// Not in the original guide's schema (Section 4.3 lists only Voter,
+// Credential, Election, Candidate, Ballot) — but the guide also defines a
+// School Admin portal (Section 1) with no table to authenticate against.
+// This is the minimal addition needed to let each institution manage its
+// own election staff accounts without crossing schema boundaries.
+model SchoolAdmin {
+  AdminID      String   @id @default(uuid()) @db.Uuid
+  TenantID     String   @db.Uuid
+  Username     String   @db.VarChar(100)
+  PasswordHash String
+  CreatedAt    DateTime @default(now())
+
+  @@unique([Username, TenantID])
+  @@map("SchoolAdmin")
+}
+
+model Election {
+  ElectionID String   @id @default(uuid()) @db.Uuid
+  TenantID   String   @db.Uuid
+  Title      String
+  StartTime  DateTime
+  EndTime    DateTime
+  Status     String   @default("DRAFT") // DRAFT | ACTIVE | CLOSED
+  CreatedAt  DateTime @default(now())
+
+  offices      ElectionOffice[]
+  affiliations ElectionAffiliation[]
+  candidates   Candidate[]
+  ballots      Ballot[]
+  participants ElectionParticipant[]
+
+  @@map("Election")
+}
+
+model ElectionOffice {
+  OfficeID  String @id @default(uuid()) @db.Uuid
+  ElectionID String @db.Uuid
+  Name      String @db.VarChar(100)
+  SortOrder Int    @default(0)
+
+  election Election @relation(fields: [ElectionID], references: [ElectionID], onDelete: Cascade)
+
+  @@unique([ElectionID, Name])
+  @@map("ElectionOffice")
+}
+
+model ElectionAffiliation {
+  AffiliationID String @id @default(uuid()) @db.Uuid
+  ElectionID    String @db.Uuid
+  Name          String @db.VarChar(100)
+
+  election Election @relation(fields: [ElectionID], references: [ElectionID], onDelete: Cascade)
+
+  @@unique([ElectionID, Name])
+  @@map("ElectionAffiliation")
+}
+
+model Candidate {
+  CandidateID  String  @id @default(uuid()) @db.Uuid
+  ElectionID   String  @db.Uuid
+  FullName     String
+  Position     String
+  Party        String?
+  ManifestoURL String?
+  ImageURL     String?
+
+  election Election @relation(fields: [ElectionID], references: [ElectionID])
+  ballots  Ballot[]
+
+  @@map("Candidate")
+}
+
+model Ballot {
+  BallotID            String  @id @default(uuid()) @db.Uuid
+  ElectionID          String  @db.Uuid
+  CandidateID         String  @db.Uuid
+  Ballot_Hash          String
+  Encrypted_Timestamp String
+  IsVerified          Boolean @default(true)
+  // NO VoterID column. Ballot anonymity is a hard constraint (see FR-05 / NFR checklist).
+
+  election  Election  @relation(fields: [ElectionID], references: [ElectionID])
+  candidate Candidate @relation(fields: [CandidateID], references: [CandidateID])
+
+  @@map("Ballot")
+}
+
+model ElectionParticipant {
+  ParticipantID  String   @id @default(uuid()) @db.Uuid
+  ElectionID     String   @db.Uuid
+  VoterID        String   @db.Uuid
+  ParticipatedAt DateTime @default(now())
+
+  election Election @relation(fields: [ElectionID], references: [ElectionID])
+  voter    Voter    @relation(fields: [VoterID], references: [VoterID])
+
+  @@unique([ElectionID, VoterID])
+  @@map("ElectionParticipant")
+}

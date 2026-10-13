@@ -1,0 +1,77 @@
+name: UniVote CI
+
+on:
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: .
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: univote_test
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate Prisma clients
+        run: npm run prisma:generate
+
+      - name: Install provisioning procedure
+        run: PGPASSWORD=test psql -h localhost -U test -d univote_test -f apps/api/sql/provision_tenant.sql
+        env:
+          PGPASSWORD: test
+
+      - name: Run unit tests
+        run: npm run test:unit
+        env:
+          DATABASE_URL: postgresql://test:test@localhost:5432/univote_test
+          JWT_SECRET: test_secret_do_not_use_in_prod
+          AES_KEY: '0000000000000000000000000000000000000000000000000000000000000000'
+          UNIVOTE_BIOMETRIC_SALT: test_salt
+          RP_ID: univote.test
+          ORIGIN: https://zut.univote.test
+
+      - name: Run integration tests
+        run: npm run test:integration
+        env:
+          DATABASE_URL: postgresql://test:test@localhost:5432/univote_test
+          JWT_SECRET: test_secret_do_not_use_in_prod
+          AES_KEY: '0000000000000000000000000000000000000000000000000000000000000000'
+          UNIVOTE_BIOMETRIC_SALT: test_salt
+          RP_ID: univote.test
+          ORIGIN: https://zut.univote.test
+          RUN_INTEGRATION_TESTS: 'true'
+
+      - name: Install Playwright browsers
+        run: npx --workspace=apps/api playwright install --with-deps chromium
+
+      - name: Run E2E tests
+        run: npm run test:e2e
+        env:
+          DATABASE_URL: postgresql://test:test@localhost:5432/univote_test
+          JWT_SECRET: test_secret_do_not_use_in_prod
+          AES_KEY: '0000000000000000000000000000000000000000000000000000000000000000'
+          UNIVOTE_BIOMETRIC_SALT: test_salt
+          RP_ID: univote.test
+          ORIGIN: https://zut.univote.test

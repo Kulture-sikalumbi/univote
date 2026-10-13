@@ -1,0 +1,41 @@
+// apps/api/prisma/public/schema.prisma
+//
+// This schema covers ONLY the shared `public` schema — the global Tenant
+// registry. Per-tenant data lives in prisma/tenant/schema.prisma and is
+// connected to dynamically (see src/lib/tenantPrisma.ts).
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../../node_modules/.prisma/public-client"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Tenant {
+  TenantID    String   @id @default(uuid()) @db.Uuid
+  SchoolName  String
+  TenantCode  String   @unique @db.VarChar(63)
+  DomainURL   String?  @unique
+  SchemaName  String   @unique @db.VarChar(63)
+  CreatedAt   DateTime @default(now())
+
+  // PENDING = school self-registered, awaiting Super Admin activation.
+  // ACTIVE  = live (default for Super-Admin-provisioned tenants).
+  // SUSPENDED = temporarily blocked.
+  Status  String  @default("ACTIVE") @db.VarChar(20)
+  LogoURL String?
+
+  // Not in the original guide's Tenant table (Section 4.2), but required in
+  // practice: each institution's Eligibility Engine (Section 6.3) talks to
+  // that institution's own SIS, so the base URL/key must be per-tenant, not
+  // a single global env var. Nullable so a tenant can be provisioned before
+  // its SIS integration is configured; falls back to the dev mock SIS router
+  // (src/modules/eligibility/mockSis.ts) when unset outside production.
+  SisBaseURL String?
+  SisApiKey  String?
+
+  @@map("Tenant")
+}

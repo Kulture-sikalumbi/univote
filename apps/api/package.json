@@ -1,0 +1,45 @@
+{
+  "name": "@univote/api",
+  "version": "0.1.0",
+  "private": true,
+  "main": "dist/server.js",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/server.js",
+    "prisma:generate": "prisma generate --schema=prisma/public/schema.prisma && prisma generate --schema=prisma/tenant/schema.prisma",
+    "prisma:migrate:public": "prisma migrate dev --schema=prisma/public/schema.prisma",
+    "test:unit": "jest --testPathPattern=tests/unit",
+    "test:integration": "node scripts/runIntegrationTests.cjs",
+    "test:e2e": "playwright test",
+    "seed:e2e": "node scripts/seedE2E.cjs"
+  },
+  "dependencies": {
+    "@prisma/client": "^5.20.0",
+    "@simplewebauthn/server": "^9.0.3",
+    "@supabase/supabase-js": "^2.116.0",
+    "bcrypt": "^5.1.1",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "express-rate-limit": "^7.4.0",
+    "helmet": "^7.1.0",
+    "jsonwebtoken": "^9.0.2",
+    "multer": "^2.4.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.47.0",
+    "@types/bcrypt": "^5.0.2",
+    "@types/cors": "^2.8.17",
+    "@types/express": "^4.17.21",
+    "@types/jest": "^29.5.12",
+    "@types/jsonwebtoken": "^9.0.6",
+    "@types/multer": "^2.2.0",
+    "@types/node": "^20.14.0",
+    "jest": "^29.7.0",
+    "prisma": "^5.20.0",
+    "ts-jest": "^29.2.5",
+    "tsx": "^4.19.1",
+    "typescript": "^5.6.2"
+  }
+}
