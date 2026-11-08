@@ -4,6 +4,12 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      diagnose_only:
+        description: Collect current App Service startup/deployment logs without deploying
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -50,5 +56,14 @@ jobs:
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
+      - name: Diagnose current App Service startup
+        if: ${{ inputs.diagnose_only }}
+        continue-on-error: true
+        run: |
+          az webapp config show --resource-group work --name "${{ vars.AZURE_WEBAPP_NAME }}" --query "{startup:appCommandLine,runtime:linuxFxVersion,alwaysOn:alwaysOn}" -o json
+          az webapp log startup show --resource-group work --name "${{ vars.AZURE_WEBAPP_NAME }}"
+          az webapp log deployment show --resource-group work --name "${{ vars.AZURE_WEBAPP_NAME }}"
+
       - name: Deploy to Azure App Service
+        if: ${{ !inputs.diagnose_only }}
         run: az webapp deploy --resource-group work --name "${{ vars.AZURE_WEBAPP_NAME }}" --src-path release.zip --type zip
