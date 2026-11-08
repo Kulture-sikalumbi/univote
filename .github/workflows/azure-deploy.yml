@@ -47,7 +47,7 @@ jobs:
 
       - name: Create deployment package
         run: |
-          zip -r release.zip apps/api/dist apps/api/package.json apps/web/dist node_modules package.json package-lock.json
+          zip -r release.zip apps/api/dist apps/api/node_modules/.prisma apps/api/package.json apps/web/dist node_modules package.json package-lock.json
 
       - name: Sign in to Azure
         uses: azure/login@v2
