@@ -1,7 +1,7 @@
 // src/modules/ballot/ballot.routes.ts
 import { Router } from 'express';
 import { getPrismaForTenant } from '../../lib/tenantPrisma';
-import { castBallot } from './ballot.service';
+import { castBallot, ElectionVotingClosedError } from './ballot.service';
 
 export const ballotRouter = Router();
 
@@ -41,7 +41,8 @@ ballotRouter.get('/:electionID', async (req, res, next) => {
     if (!election) {
       return res.status(404).json({ error: 'Election not found' });
     }
-    if (election.Status !== 'ACTIVE') {
+    const now = new Date();
+    if (election.Status !== 'ACTIVE' || election.StartTime > now || election.EndTime <= now) {
       return res.status(403).json({ error: 'This election is not currently open for voting' });
     }
 
@@ -109,6 +110,9 @@ ballotRouter.post('/:electionID/cast', async (req, res, next) => {
     );
     res.status(201).json(result);
   } catch (err) {
+    if (err instanceof ElectionVotingClosedError) {
+      return res.status(403).json({ error: err.message, reasonCode: 'ELECTION_CLOSED' });
+    }
     if (err instanceof Error && err.message.includes('already cast a ballot')) {
       return res.status(409).json({ error: err.message });
     }

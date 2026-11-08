@@ -77,6 +77,9 @@ async function main() {
     await tenantDb.candidate.create({
       data: { ElectionID: election.ElectionID, FullName: 'E2E Candidate', Position: 'President' },
     });
+    await tenantDb.electionOffice.create({
+      data: { ElectionID: election.ElectionID, Name: 'President', SortOrder: 0 },
+    });
 
     console.log(`Prepared disposable E2E tenant ${tenant.SchoolName} with one active election.`);
     console.log(`Institution code: ${tenant.TenantCode}`);

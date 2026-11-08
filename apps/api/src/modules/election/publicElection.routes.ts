@@ -6,9 +6,21 @@
 // the same /api/v1/elections prefix in app.ts; falls through (via next())
 // for every other path so the admin routes still apply there.
 import { Router } from 'express';
-import { getActiveElection } from './election.service';
+import { getActiveElection, getPublishedResults } from './election.service';
 
 export const publicElectionRouter = Router();
+
+publicElectionRouter.get('/results', async (req, res, next) => {
+  try {
+    if (req.session!.role !== 'STUDENT') {
+      return res.status(403).json({ error: 'Student access is required to view published election results.' });
+    }
+    const results = await getPublishedResults(req.session!.tenantSchema);
+    res.json(results);
+  } catch (err) {
+    next(err);
+  }
+});
 
 publicElectionRouter.get('/active', async (req, res, next) => {
   try {

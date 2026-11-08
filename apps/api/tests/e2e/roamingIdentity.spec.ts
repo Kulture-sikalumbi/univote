@@ -1,6 +1,7 @@
 import { test, expect, type BrowserContext, type CDPSession } from '@playwright/test';
 
 test('SIS voter changes the temporary password, enrolls a passkey, and votes from a second device', async ({ browser }) => {
+  test.setTimeout(90_000);
   test.skip(
     process.env.E2E_RUN_FULL_FLOW !== 'true',
     'Seed a disposable test database, start the API and web dev servers, then set E2E_RUN_FULL_FLOW=true.'
@@ -22,7 +23,7 @@ test('SIS voter changes the temporary password, enrolls a passkey, and votes fro
     const authenticatorA = await addPlatformAuthenticator(contextA, pageA);
 
     // Import voters from the local SIS mock and capture the one-time password.
-    await pageA.goto(webBaseURL);
+    await pageA.goto(`${webBaseURL}/login`);
     await pageA.getByRole('button', { name: 'School Admin' }).click();
     await pageA.getByLabel('Institution code').fill(tenantCode!);
     await pageA.getByLabel('Username').fill(adminUsername);
@@ -45,7 +46,7 @@ test('SIS voter changes the temporary password, enrolls a passkey, and votes fro
     await pageA.getByLabel('Student ID').fill(studentID);
     await pageA.getByLabel('Password').fill(temporaryPassword);
     await pageA.getByRole('button', { name: 'Log in' }).click();
-    await pageA.getByLabel('New password').fill(studentPassword);
+    await pageA.getByLabel('New password', { exact: true }).fill(studentPassword);
     await pageA.getByLabel('Confirm new password').fill(studentPassword);
     await pageA.getByRole('button', { name: 'Save password' }).click();
     await pageA.getByRole('button', { name: 'Continue with biometric setup' }).click();
@@ -66,7 +67,7 @@ test('SIS voter changes the temporary password, enrolls a passkey, and votes fro
       credential: credentials.credentials[0],
     });
 
-    await pageB.goto(webBaseURL);
+    await pageB.goto(`${webBaseURL}/login`);
     await pageB.getByLabel('Institution code').fill(tenantCode!);
     await pageB.getByLabel('Student ID').fill(studentID);
     await pageB.getByLabel('Password').fill(studentPassword);

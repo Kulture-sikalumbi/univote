@@ -6,6 +6,7 @@ import {
   ElectionConfigurationError,
   getCandidate,
   getResults,
+  ResultsNotPublishedError,
   isValidStatus,
   listElections,
   setElectionOptions,
@@ -29,6 +30,9 @@ electionRouter.get('/', async (req, res, next) => {
     const elections = await listElections(req.session!.tenantSchema);
     res.json(elections);
   } catch (err) {
+    if (err instanceof ElectionConfigurationError) {
+      return res.status(err.statusCode).json({ error: err.message });
+    }
     next(err);
   }
 });
@@ -49,6 +53,9 @@ electionRouter.post('/', async (req, res, next) => {
     );
     res.status(201).json(election);
   } catch (err) {
+    if (err instanceof ElectionConfigurationError) {
+      return res.status(err.statusCode).json({ error: err.message });
+    }
     next(err);
   }
 });
@@ -96,6 +103,12 @@ electionRouter.get('/:id/results', async (req, res, next) => {
     const results = await getResults(req.session!.tenantSchema, req.params.id);
     res.json(results);
   } catch (err) {
+    if (err instanceof ElectionConfigurationError) {
+      return res.status(err.statusCode).json({ error: err.message });
+    }
+    if (err instanceof ResultsNotPublishedError) {
+      return res.status(409).json({ error: err.message, endTime: err.endTime });
+    }
     next(err);
   }
 });

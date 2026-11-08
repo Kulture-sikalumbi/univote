@@ -8,5 +8,8 @@ export default defineConfig({
   use: {
     baseURL: process.env.E2E_WEB_BASE_URL ?? 'http://localhost:5173',
     trace: 'on-first-retry',
+    ...(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH
+      ? { launchOptions: { executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH } }
+      : {}),
   },
 });

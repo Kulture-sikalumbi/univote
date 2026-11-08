@@ -19,6 +19,13 @@ export interface CastBallotResult {
   confirmation: string;
 }
 
+export class ElectionVotingClosedError extends Error {
+  constructor() {
+    super('Voting is only available between the scheduled start and end times.');
+    this.name = 'ElectionVotingClosedError';
+  }
+}
+
 export async function castBallot(
   tenantSchema: string,
   electionID: string,
@@ -27,7 +34,6 @@ export async function castBallot(
   ballotTokenJti: string
 ): Promise<CastBallotResult> {
   const db = await getPrismaForTenant(tenantSchema);
-
   const selections = Array.isArray(candidateIDs) ? candidateIDs : [candidateIDs];
   const ballotRows = selections.map((candidateID) => {
     const ballotID = crypto.randomUUID();
@@ -42,12 +48,24 @@ export async function castBallot(
   });
 
   try {
-    await db.$transaction([
-      ...ballotRows.map((data) => db.ballot.create({ data })),
-      db.electionParticipant.create({
-        data: { ElectionID: electionID, VoterID: voterID },
-      }),
-    ]);
+    await db.$transaction(async (tx) => {
+      const now = new Date();
+      const election = await tx.election.findFirst({
+        where: {
+          ElectionID: electionID,
+          Status: 'ACTIVE',
+          StartTime: { lte: now },
+          EndTime: { gt: now },
+        },
+        select: { ElectionID: true },
+      });
+      if (!election) throw new ElectionVotingClosedError();
+
+      await Promise.all([
+        ...ballotRows.map((data) => tx.ballot.create({ data })),
+        tx.electionParticipant.create({ data: { ElectionID: electionID, VoterID: voterID } }),
+      ]);
+    });
   } catch (err) {
     if (isUniqueConstraintError(err)) {
       throw new Error('You have already cast a ballot in this election.');

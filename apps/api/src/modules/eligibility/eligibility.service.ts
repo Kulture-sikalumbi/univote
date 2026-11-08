@@ -35,6 +35,17 @@ export async function checkEligibility(
     return { eligible: false, reasonCode: 'NOT_ENROLLED' };
   }
 
+  const election = await db.election.findUnique({ where: { ElectionID: electionID } });
+  const now = new Date();
+  if (
+    !election ||
+    election.Status !== 'ACTIVE' ||
+    election.StartTime > now ||
+    election.EndTime <= now
+  ) {
+    return { eligible: false, reasonCode: 'ELECTION_CLOSED' };
+  }
+
   if (sisBaseURL && sisApiKey) {
     // Optional path: a real institutional SIS integration.
     let sisResponse: Response;
@@ -65,11 +76,6 @@ export async function checkEligibility(
   // when the SIS says the student is enrolled.
   if (!voter.IsActive) {
     return { eligible: false, reasonCode: 'NOT_ENROLLED' };
-  }
-
-  const election = await db.election.findUnique({ where: { ElectionID: electionID } });
-  if (!election || election.Status !== 'ACTIVE') {
-    return { eligible: false, reasonCode: 'ELECTION_CLOSED' };
   }
 
   // One-student-one-vote, enforced via the anonymity-preserving

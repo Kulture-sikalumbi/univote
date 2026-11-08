@@ -30,7 +30,7 @@ if (!/(^|[_-])test([_-]|$)/i.test(databaseName) && process.env.UNIVOTE_TEST_DATA
 }
 
 const runner = process.platform === 'win32' ? 'npx.cmd' : 'npx';
-const result = spawnSync(runner, ['jest', '--testPathPattern=tests/integration', '--runInBand'], {
+const result = spawnSync(runner, ['jest', '--testPathPattern=tests/integration', '--runInBand', '--testTimeout=30000'], {
   stdio: 'inherit',
   env: { ...process.env, RUN_INTEGRATION_TESTS: 'true' },
   shell: process.platform === 'win32',

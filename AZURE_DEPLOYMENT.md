@@ -10,7 +10,7 @@ reverse proxy that preserves the tenant host.
 
 Create these resources in the same region:
 
-- Azure App Service, Node 20 LTS, Linux
+- Azure App Service, Node 22 LTS, Linux
 - Azure Database for PostgreSQL Flexible Server, PostgreSQL 16
 - Azure Key Vault (recommended for production secrets)
 - A custom domain for each institution, or a wildcard domain such as

@@ -43,7 +43,7 @@ export interface BallotLoginCompleteResponse {
   ballotToken: string;
 }
 
-export type ElectionStatus = 'DRAFT' | 'ACTIVE' | 'CLOSED';
+export type ElectionStatus = 'DRAFT' | 'SCHEDULED' | 'ACTIVE' | 'CLOSED';
 
 export interface Election {
   ElectionID: string;
@@ -76,6 +76,9 @@ export interface TallyEntry {
 }
 
 export interface ResultsResponse {
+  electionID: string;
+  electionTitle: string;
+  endTime: string;
   tally: TallyEntry[];
   totalParticipants: number;
 }

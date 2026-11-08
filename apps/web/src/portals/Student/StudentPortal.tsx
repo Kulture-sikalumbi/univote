@@ -20,11 +20,14 @@ import type {
   CastVoteResponse,
   Election,
   EligibilityResponse,
+  ResultsResponse,
 } from '../../lib/types';
 
 type Step =
   | 'loading-election'
   | 'no-election'
+  | 'scheduled-waiting'
+  | 'election-ready'
   | 'checking-eligibility'
   | 'ineligible'
   | 'biometric-enroll'
@@ -35,6 +38,7 @@ type Step =
   | 'confirm'
   | 'casting'
   | 'done'
+  | 'results'
   | 'fatal-error';
 
 const REASON_MESSAGES: Record<string, string> = {
@@ -65,6 +69,7 @@ export function StudentPortal({ token }: StudentPortalProps) {
   const [ballot, setBallot] = useState<BallotResponse | null>(null);
   const [selectedCandidates, setSelectedCandidates] = useState<Record<string, Candidate>>({});
   const [receipt, setReceipt] = useState<CastVoteResponse | null>(null);
+  const [publishedResults, setPublishedResults] = useState<ResultsResponse[]>([]);
   const [busyLabel, setBusyLabel] = useState<string | null>(null);
   const [retryAuthenticationOptions, setRetryAuthenticationOptions] =
     useState<PublicKeyCredentialRequestOptionsJSONLike | null>(null);
@@ -94,6 +99,36 @@ export function StudentPortal({ token }: StudentPortalProps) {
   }, [token]);
 
   useEffect(() => {
+    if (step !== 'no-election') return;
+    let cancelled = false;
+    const checkForOpening = async () => {
+      try {
+        const active = await api.get<Election>('/elections/active', token);
+        if (!cancelled) {
+          setElection(active);
+          setStep('election-ready');
+        }
+      } catch (err) {
+        if (!(err instanceof ApiError) || err.status !== 404) return;
+        try {
+          const results = await api.get<ResultsResponse[]>('/elections/results', token);
+          if (!cancelled && results.length > 0) {
+            setPublishedResults(results);
+            setStep('results');
+          }
+        } catch {
+          // A later poll can retry when results become available.
+        }
+      }
+    };
+    const timer = window.setInterval(() => void checkForOpening(), 15_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [step, token]);
+
+  useEffect(() => {
     let cancelled = false;
 
     async function loadActiveElection() {
@@ -101,11 +136,25 @@ export function StudentPortal({ token }: StudentPortalProps) {
         const active = await api.get<Election>('/elections/active', token);
         if (cancelled) return;
         setElection(active);
-        await runEligibilityCheck(active.ElectionID);
+        if (active.Status === 'SCHEDULED') {
+          setStep('scheduled-waiting');
+        } else {
+          await runEligibilityCheck(active.ElectionID);
+        }
       } catch (err) {
         if (cancelled) return;
         if (err instanceof ApiError && err.status === 404) {
-          setStep('no-election');
+          try {
+            const results = await api.get<ResultsResponse[]>('/elections/results', token);
+            if (results.length > 0) {
+              setPublishedResults(results);
+              setStep('results');
+            } else {
+              setStep('no-election');
+            }
+          } catch {
+            setStep('no-election');
+          }
         } else {
           setError(describeError(err));
           setStep('fatal-error');
@@ -119,6 +168,52 @@ export function StudentPortal({ token }: StudentPortalProps) {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
+
+  useEffect(() => {
+    if (!election || election.Status !== 'SCHEDULED') return;
+    let cancelled = false;
+    const checkForStart = async () => {
+      try {
+        const active = await api.get<Election>('/elections/active', token);
+        if (!cancelled && active.Status !== 'SCHEDULED') {
+          setElection(active);
+          setStep('election-ready');
+        }
+      } catch {
+        // The published-results poll below handles the scheduled end time.
+      }
+    };
+    const timer = window.setInterval(() => void checkForStart(), 15_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [election, token]);
+
+  useEffect(() => {
+    if (!election) return;
+    let cancelled = false;
+    const refreshResults = async () => {
+      if (Date.now() < new Date(election.EndTime).getTime() || step === 'casting') return;
+      try {
+        const results = await api.get<ResultsResponse[]>('/elections/results', token);
+        const finalResult = results.find((entry) => entry.electionID === election.ElectionID);
+        if (!cancelled && finalResult) {
+          setPublishedResults([finalResult]);
+          setBallotToken(null);
+          setStep('results');
+        }
+      } catch {
+        // Keep the current screen if a temporary results request fails.
+      }
+    };
+    void refreshResults();
+    const timer = window.setInterval(() => void refreshResults(), 15_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [election, step, token]);
 
   async function startBiometricLogin(electionID: string) {
     setStep('biometric-verify');
@@ -277,10 +372,41 @@ export function StudentPortal({ token }: StudentPortalProps) {
       return (
         <Card>
           <Alert variant="info" title="No election open right now">
-            There is no active election at your institution at the moment. Please check back later.
+            There is no election open right now. This page checks automatically and will show the election when its scheduled start time arrives.
           </Alert>
         </Card>
       );
+
+    case 'scheduled-waiting':
+      return (
+        <Card className="space-y-3">
+          <p className="text-xs font-semibold uppercase tracking-wider text-blue-700">Scheduled election</p>
+          <h2 className="text-xl font-bold text-gray-900">{election?.Title}</h2>
+          <p className="text-sm text-gray-600">
+            Voting opens {election && new Date(election.StartTime).toLocaleString()}. This page will update automatically when voting begins.
+          </p>
+          <p className="text-xs text-gray-500">Scheduled to close {election && new Date(election.EndTime).toLocaleString()}.</p>
+        </Card>
+      );
+
+    case 'election-ready':
+      return (
+        <Card className="space-y-4">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wider text-green-700">Voting is open</p>
+            <h2 className="mt-1 text-xl font-bold text-gray-900">{election?.Title}</h2>
+            <p className="mt-1 text-sm text-gray-600">
+              Voting closes at {election && new Date(election.EndTime).toLocaleString()}.
+            </p>
+          </div>
+          <Button fullWidth onClick={() => election && runEligibilityCheck(election.ElectionID)}>
+            Continue to secure voting
+          </Button>
+        </Card>
+      );
+
+    case 'results':
+      return <StudentResultsView results={publishedResults} />;
 
     case 'ineligible':
       return (
@@ -484,6 +610,70 @@ function BallotStep({
         Review &amp; confirm
       </Button>
     </Card>
+  );
+}
+
+function StudentResultsView({ results }: { results: ResultsResponse[] }) {
+  return (
+    <div className="mx-auto max-w-4xl space-y-5">
+      <div>
+        <p className="text-xs font-semibold uppercase tracking-wider text-primary">Published results</p>
+        <h2 className="mt-1 text-2xl font-bold text-gray-900">Election results</h2>
+        <p className="mt-1 text-sm text-gray-600">Final results are available after voting closes.</p>
+      </div>
+      {results.map((result) => {
+        const offices = [...new Set(result.tally.map((entry) => entry.position))];
+        return (
+          <Card key={result.electionID} className="space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-gray-100 pb-4">
+              <div>
+                <h3 className="text-lg font-bold text-gray-900">{result.electionTitle}</h3>
+                <p className="text-xs text-gray-500">Ended {new Date(result.endTime).toLocaleString()}</p>
+              </div>
+              <div className="rounded-xl bg-primary/5 px-4 py-2 text-center">
+                <p className="text-2xl font-bold text-primary">{result.totalParticipants}</p>
+                <p className="text-xs text-gray-600">students voted</p>
+              </div>
+            </div>
+            <div className="grid gap-4 md:grid-cols-2">
+              {offices.map((office) => {
+                const entries = result.tally.filter((entry) => entry.position === office);
+                const topVotes = Math.max(0, ...entries.map((entry) => entry.votes));
+                const winners = entries.filter((entry) => topVotes > 0 && entry.votes === topVotes);
+                return (
+                  <section key={office} className="rounded-xl border border-gray-200 p-4">
+                    <div className="mb-3 flex items-center justify-between gap-2">
+                      <h4 className="font-semibold text-gray-900">{office}</h4>
+                      <span className="rounded-full bg-green-50 px-3 py-1 text-xs font-semibold text-green-800">
+                        {topVotes === 0 ? 'No votes' : winners.length > 1 ? 'Tie' : 'Winner'}
+                      </span>
+                    </div>
+                    {winners.length > 0 && (
+                      <p className="mb-3 text-sm font-semibold text-green-800">
+                        {winners.length > 1 ? `Joint leaders: ${winners.map((winner) => winner.fullName).join(', ')}` : winners[0].fullName}
+                      </p>
+                    )}
+                    <div className="space-y-3">
+                      {entries.sort((a, b) => b.votes - a.votes || a.fullName.localeCompare(b.fullName)).map((entry) => (
+                        <div key={entry.candidateID}>
+                          <div className="mb-1 flex justify-between gap-3 text-sm">
+                            <span className="text-gray-700">{entry.fullName}{entry.party ? ` · ${entry.party}` : ''}</span>
+                            <span className="font-semibold tabular-nums text-gray-900">{entry.votes}</span>
+                          </div>
+                          <div className="h-2 overflow-hidden rounded-full bg-gray-100">
+                            <div className="h-full rounded-full bg-primary" style={{ width: `${topVotes ? (entry.votes / topVotes) * 100 : 0}%` }} />
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </section>
+                );
+              })}
+            </div>
+          </Card>
+        );
+      })}
+    </div>
   );
 }
 

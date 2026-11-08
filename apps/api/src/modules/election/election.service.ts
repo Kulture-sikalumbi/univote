@@ -17,7 +17,12 @@ export class ElectionConfigurationError extends Error {
 
 export async function listElections(tenantSchema: string) {
   const db = await getPrismaForTenant(tenantSchema);
-  return db.election.findMany({
+  const now = new Date();
+  await db.election.updateMany({
+    where: { Status: 'ACTIVE', EndTime: { lte: now } },
+    data: { Status: 'CLOSED' },
+  });
+  const elections = await db.election.findMany({
     orderBy: { CreatedAt: 'desc' },
     include: {
       offices: { orderBy: { SortOrder: 'asc' } },
@@ -25,6 +30,14 @@ export async function listElections(tenantSchema: string) {
       candidates: { orderBy: [{ Position: 'asc' }, { FullName: 'asc' }] },
     },
   });
+  return elections.map((election) => presentElectionStatus(election, now));
+}
+
+function presentElectionStatus<T extends { Status: string; StartTime: Date; EndTime: Date }>(election: T, now: Date): T {
+  if (election.Status === 'ACTIVE' && election.StartTime > now) {
+    return { ...election, Status: 'SCHEDULED' };
+  }
+  return election;
 }
 
 // Not in the Section 7 contract table, which has no student-facing "which
@@ -34,11 +47,24 @@ export async function listElections(tenantSchema: string) {
 // than widening the admin-only /elections list to students.
 export async function getActiveElection(tenantSchema: string) {
   const db = await getPrismaForTenant(tenantSchema);
-  return db.election.findFirst({
-    where: { Status: 'ACTIVE' },
+  const now = new Date();
+  await db.election.updateMany({
+    where: { Status: 'ACTIVE', EndTime: { lte: now } },
+    data: { Status: 'CLOSED' },
+  });
+  const active = await db.election.findFirst({
+    where: { Status: 'ACTIVE', StartTime: { lte: now }, EndTime: { gt: now } },
     orderBy: { CreatedAt: 'desc' },
     include: { offices: { orderBy: { SortOrder: 'asc' } } },
   });
+  if (active) return active;
+
+  const upcoming = await db.election.findFirst({
+    where: { Status: 'ACTIVE', StartTime: { gt: now }, EndTime: { gt: now } },
+    orderBy: { StartTime: 'asc' },
+    include: { offices: { orderBy: { SortOrder: 'asc' } } },
+  });
+  return upcoming ? { ...upcoming, Status: 'SCHEDULED' } : null;
 }
 
 export async function createElection(
@@ -48,6 +74,16 @@ export async function createElection(
   startTime: Date,
   endTime: Date
 ) {
+  if (!title.trim()) throw new ElectionConfigurationError('Enter an election title.', 400);
+  if (!Number.isFinite(startTime.getTime()) || !Number.isFinite(endTime.getTime())) {
+    throw new ElectionConfigurationError('Enter valid election start and end times.', 400);
+  }
+  if (startTime <= new Date()) {
+    throw new ElectionConfigurationError('The scheduled start time must be in the future.', 400);
+  }
+  if (endTime <= startTime) {
+    throw new ElectionConfigurationError('The election end time must be after its start time.', 400);
+  }
   const db = await getPrismaForTenant(tenantSchema);
   return db.election.create({
     data: { TenantID: tenantID, Title: title, StartTime: startTime, EndTime: endTime, Status: 'DRAFT' },
@@ -56,6 +92,40 @@ export async function createElection(
 
 export async function setElectionStatus(tenantSchema: string, electionID: string, status: ElectionStatus) {
   const db = await getPrismaForTenant(tenantSchema);
+  const now = new Date();
+  await db.election.updateMany({
+    where: { Status: 'ACTIVE', EndTime: { lte: now } },
+    data: { Status: 'CLOSED' },
+  });
+  const current = await db.election.findUnique({ where: { ElectionID: electionID } });
+  if (!current) throw new ElectionConfigurationError('Election not found.', 404);
+
+  if (current.Status === 'CLOSED' && status !== 'CLOSED') {
+    throw new ElectionConfigurationError('A closed election cannot be reopened.');
+  }
+  if (current.Status === 'ACTIVE' && status === 'DRAFT' && current.StartTime <= now) {
+    throw new ElectionConfigurationError('A started election cannot return to draft.');
+  }
+  if (status === 'ACTIVE') {
+    if (current.EndTime <= now) {
+      throw new ElectionConfigurationError('This election has already passed its scheduled end time.');
+    }
+    if (current.StartTime >= current.EndTime) {
+      throw new ElectionConfigurationError('The election end time must be after its start time.', 400);
+    }
+    const overlap = await db.election.findFirst({
+      where: {
+        ElectionID: { not: electionID },
+        Status: 'ACTIVE',
+        StartTime: { lt: current.EndTime },
+        EndTime: { gt: current.StartTime },
+      },
+      select: { ElectionID: true, Title: true },
+    });
+    if (overlap) {
+      throw new ElectionConfigurationError(`This schedule overlaps with "${overlap.Title}".`);
+    }
+  }
 
   if (status === 'ACTIVE') {
     const [offices, candidates] = await Promise.all([
@@ -194,18 +264,34 @@ export interface TallyEntry {
 }
 
 export interface ResultsResponse {
+  electionID: string;
+  electionTitle: string;
+  endTime: Date;
   tally: TallyEntry[];
   totalParticipants: number;
 }
 
+export class ResultsNotPublishedError extends Error {
+  constructor(readonly endTime: Date) {
+    super('Final results will be available after the election has ended.');
+    this.name = 'ResultsNotPublishedError';
+  }
+}
+
 /**
- * Real-time result tally. Deliberately joins Candidate -> count(Ballot) only
+ * Final result tally. Deliberately joins Candidate -> count(Ballot) only
  * — never joins through ElectionParticipant, which would be the only way to
  * (incorrectly) associate a specific voter with a specific candidate. The
  * two tables must never be joined together (Section 6.4).
  */
-export async function getResults(tenantSchema: string, electionID: string): Promise<ResultsResponse> {
+export async function getResults(tenantSchema: string, electionID: string, now = new Date()): Promise<ResultsResponse> {
   const db = await getPrismaForTenant(tenantSchema);
+
+  const election = await db.election.findUnique({ where: { ElectionID: electionID } });
+  if (!election) throw new ElectionConfigurationError('Election not found.', 404);
+  if (election.Status === 'DRAFT' || (election.Status !== 'CLOSED' && election.EndTime > now)) {
+    throw new ResultsNotPublishedError(election.EndTime);
+  }
 
   const candidates = await db.candidate.findMany({
     where: { ElectionID: electionID },
@@ -215,6 +301,9 @@ export async function getResults(tenantSchema: string, electionID: string): Prom
   const totalParticipants = await db.electionParticipant.count({ where: { ElectionID: electionID } });
 
   return {
+    electionID,
+    electionTitle: election.Title,
+    endTime: election.EndTime,
     tally: candidates.map((c) => ({
       candidateID: c.CandidateID,
       fullName: c.FullName,
@@ -224,4 +313,23 @@ export async function getResults(tenantSchema: string, electionID: string): Prom
     })),
     totalParticipants,
   };
+}
+
+export async function getPublishedResults(tenantSchema: string, now = new Date()): Promise<ResultsResponse[]> {
+  const db = await getPrismaForTenant(tenantSchema);
+  await db.election.updateMany({
+    where: { Status: 'ACTIVE', EndTime: { lte: now } },
+    data: { Status: 'CLOSED' },
+  });
+  const elections = await db.election.findMany({
+    where: {
+      OR: [
+        { Status: 'CLOSED' },
+        { Status: 'ACTIVE', EndTime: { lte: now } },
+      ],
+    },
+    orderBy: { EndTime: 'desc' },
+    select: { ElectionID: true },
+  });
+  return Promise.all(elections.map(({ ElectionID }) => getResults(tenantSchema, ElectionID, now)));
 }

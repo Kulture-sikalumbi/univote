@@ -1,4 +1,5 @@
 import type { Request, Response, NextFunction } from 'express';
+import jwt from 'jsonwebtoken';
 import { authGuard } from '../../src/middleware/authGuard';
 import { issueSessionToken } from '../../src/modules/auth/jwt.service';
 
@@ -41,5 +42,23 @@ describe('authGuard first-login password gate', () => {
     authGuard('SESSION', ['STUDENT'], true)(req, res, next);
 
     expect(next).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('authGuard ballot token enforcement', () => {
+  it('rejects an expired ballot JWT', () => {
+    const token = jwt.sign(
+      { voterID: 'voter-1', electionID: 'election-1', tenantID: 'tenant-1', tenantSchema: 'zut', type: 'BALLOT' },
+      process.env.JWT_SECRET!,
+      { expiresIn: -1, jwtid: 'expired-ballot-token' }
+    );
+    const res = responseMock();
+    const next = jest.fn() as jest.MockedFunction<NextFunction>;
+
+    authGuard('BALLOT')(requestWithToken(token), res, next);
+
+    expect(res.status).toHaveBeenCalledWith(401);
+    expect(res.json).toHaveBeenCalledWith({ error: 'Invalid or expired token' });
+    expect(next).not.toHaveBeenCalled();
   });
 });

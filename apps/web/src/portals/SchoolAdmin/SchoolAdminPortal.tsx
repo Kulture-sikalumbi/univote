@@ -90,10 +90,18 @@ function ElectionsTab({ token }: { token: string }) {
     reload();
   }, [reload]);
 
+  useEffect(() => {
+    const timer = window.setInterval(() => void reload(), 15_000);
+    return () => window.clearInterval(timer);
+  }, [reload]);
+
   return (
     <div className="space-y-6">
       <Card>
         <h2 className="mb-3 text-base font-semibold text-gray-900">Create election</h2>
+        <p className="mb-4 text-sm text-gray-600">
+          Scheduling starts voting at the selected start time and closes it at the end time.
+        </p>
         <CreateElectionForm token={token} onCreated={(electionID) => reload(electionID)} />
       </Card>
 
@@ -135,7 +143,15 @@ function CreateElectionForm({ token, onCreated }: { token: string; onCreated: (e
     setError(null);
     setBusy(true);
     try {
-      const election = await api.post<Election>('/elections', { title, startTime, endTime }, token);
+      const election = await api.post<Election>(
+        '/elections',
+        {
+          title,
+          startTime: new Date(startTime).toISOString(),
+          endTime: new Date(endTime).toISOString(),
+        },
+        token
+      );
       setTitle('');
       setStartTime('');
       setEndTime('');
@@ -178,6 +194,7 @@ function CreateElectionForm({ token, onCreated }: { token: string; onCreated: (e
 
 const STATUS_STYLES: Record<ElectionStatus, string> = {
   DRAFT: 'bg-gray-100 text-gray-600',
+  SCHEDULED: 'bg-blue-100 text-blue-700',
   ACTIVE: 'bg-green-100 text-green-700',
   CLOSED: 'bg-red-100 text-red-700',
 };
@@ -197,6 +214,13 @@ function ElectionCard({
 }) {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const action = election.Status === 'DRAFT'
+    ? { status: 'ACTIVE' as const, label: 'Schedule election' }
+    : election.Status === 'SCHEDULED'
+      ? { status: 'DRAFT' as const, label: 'Cancel schedule' }
+      : election.Status === 'ACTIVE'
+        ? { status: 'CLOSED' as const, label: 'Close election' }
+        : null;
 
   async function setStatus(status: ElectionStatus) {
     setError(null);
@@ -229,16 +253,21 @@ function ElectionCard({
         <div className="mt-4 space-y-4 border-t border-gray-100 pt-4">
           {error && <Alert variant="error">{error}</Alert>}
           <div className="flex gap-2">
-            {(['DRAFT', 'ACTIVE', 'CLOSED'] as ElectionStatus[]).map((status) => (
+            {action && (
               <Button
-                key={status}
-                variant={election.Status === status ? 'primary' : 'secondary'}
-                disabled={busy || election.Status === status}
-                onClick={() => setStatus(status)}
+                variant={action.status === 'CLOSED' ? 'danger' : 'primary'}
+                disabled={busy}
+                onClick={() => setStatus(action.status)}
               >
-                {status}
+                {busy ? <Spinner label="Updating…" /> : action.label}
               </Button>
-            ))}
+            )}
+            {election.Status === 'SCHEDULED' && (
+              <p className="self-center text-sm text-blue-700">Voting opens automatically at the scheduled start.</p>
+            )}
+            {election.Status === 'ACTIVE' && (
+              <p className="self-center text-sm text-green-700">Voting is open and closes automatically at the scheduled end.</p>
+            )}
           </div>
 
           <ElectionOptionsForm token={token} election={election} onSaved={onChanged} />
@@ -261,7 +290,7 @@ function ElectionCard({
           ) : (
             <p className="text-sm text-gray-500">Candidate entries are locked after the election leaves draft.</p>
           )}
-          <ResultsPanel token={token} electionID={election.ElectionID} />
+          <ResultsPanel token={token} election={election} />
         </div>
       )}
     </Card>
@@ -724,50 +753,99 @@ function BrandingTab({ token }: { token: string }) {
   );
 }
 
-function ResultsPanel({ token, electionID }: { token: string; electionID: string }) {
+function ResultsPanel({ token, election }: { token: string; election: Election }) {
   const [results, setResults] = useState<ResultsResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
-  async function loadResults() {
+  const loadResults = useCallback(async () => {
+    if (election.Status !== 'CLOSED') return;
     setLoading(true);
     setError(null);
     try {
-      const data = await api.get<ResultsResponse>(`/elections/${electionID}/results`, token);
+      const data = await api.get<ResultsResponse>(`/elections/${election.ElectionID}/results`, token);
       setResults(data);
     } catch (err) {
       setError(describeError(err, 'Could not load results.'));
     } finally {
       setLoading(false);
     }
-  }
+  }, [election.ElectionID, election.Status, token]);
+
+  useEffect(() => {
+    setResults(null);
+    if (election.Status === 'CLOSED') void loadResults();
+  }, [election.Status, election.ElectionID, loadResults]);
 
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between">
-        <h3 className="text-sm font-semibold text-gray-700">Results</h3>
-        <Button variant="secondary" onClick={loadResults} disabled={loading}>
-          {loading ? <Spinner label="Loading…" /> : 'Refresh results'}
-        </Button>
+        <h3 className="text-base font-semibold text-gray-900">Election results</h3>
+        {election.Status === 'CLOSED' && (
+          <Button variant="secondary" onClick={() => void loadResults()} disabled={loading}>
+            {loading ? <Spinner label="Loading…" /> : 'Refresh results'}
+          </Button>
+        )}
       </div>
       {error && <Alert variant="error">{error}</Alert>}
-      {results && (
-        <div className="space-y-2">
-          <p className="text-xs text-gray-500">{results.totalParticipants} student(s) have voted.</p>
-          <table className="w-full text-sm">
-            <tbody>
-              {results.tally.map((entry) => (
-                <tr key={entry.candidateID} className="border-b border-gray-100 last:border-0">
-                  <td className="py-1.5 text-gray-900">{entry.fullName}</td>
-                  <td className="py-1.5 text-gray-500">{entry.position}</td>
-                  <td className="py-1.5 text-gray-500">{entry.party}</td>
-                  <td className="py-1.5 text-right font-semibold text-gray-900">{entry.votes}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+      {election.Status !== 'CLOSED' && (
+        <p className="rounded-xl bg-slate-50 p-4 text-sm text-gray-600">
+          Final totals and winners will appear here automatically after voting closes at {new Date(election.EndTime).toLocaleString()}.
+        </p>
       )}
+      {results && <ResultsSummary results={results} />}
+    </div>
+  );
+}
+
+function ResultsSummary({ results }: { results: ResultsResponse }) {
+  const offices = [...new Set(results.tally.map((entry) => entry.position))];
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-slate-50 p-4">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Final results</p>
+          <p className="text-lg font-bold text-gray-900">{results.electionTitle}</p>
+        </div>
+        <div className="rounded-xl bg-white px-4 py-2 text-center shadow-sm">
+          <p className="text-2xl font-bold text-primary">{results.totalParticipants}</p>
+          <p className="text-xs text-gray-500">students voted</p>
+        </div>
+      </div>
+      <div className="grid gap-4 lg:grid-cols-2">
+        {offices.map((office) => {
+          const entries = results.tally.filter((entry) => entry.position === office);
+          const high = Math.max(0, ...entries.map((entry) => entry.votes));
+          const leaders = entries.filter((entry) => entry.votes === high && high > 0);
+          const label = high === 0 ? 'No votes' : leaders.length > 1 ? 'Tie' : 'Winner';
+          return (
+            <section key={office} className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm">
+              <div className="mb-3 flex items-center justify-between gap-2">
+                <h4 className="font-semibold text-gray-900">{office}</h4>
+                <span className="rounded-full bg-primary/10 px-3 py-1 text-xs font-semibold text-primary">{label}</span>
+              </div>
+              {leaders.length > 0 && (
+                <p className="mb-4 rounded-lg bg-green-50 px-3 py-2 text-sm font-semibold text-green-800">
+                  {leaders.length > 1 ? `Joint leaders: ${leaders.map((leader) => leader.fullName).join(', ')}` : leaders[0].fullName}
+                </p>
+              )}
+              <div className="space-y-3">
+                {entries.sort((a, b) => b.votes - a.votes || a.fullName.localeCompare(b.fullName)).map((entry) => (
+                  <div key={entry.candidateID}>
+                    <div className="mb-1 flex items-center justify-between gap-3 text-sm">
+                      <span className="font-medium text-gray-800">{entry.fullName}{entry.party ? ` · ${entry.party}` : ''}</span>
+                      <span className="font-semibold tabular-nums text-gray-900">{entry.votes}</span>
+                    </div>
+                    <div className="h-2 overflow-hidden rounded-full bg-gray-100">
+                      <div className="h-full rounded-full bg-primary" style={{ width: `${high ? (entry.votes / high) * 100 : 0}%` }} />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </section>
+          );
+        })}
+      </div>
     </div>
   );
 }
