@@ -15,8 +15,9 @@
 // sync with the models below by hand.
 
 generator client {
-  provider = "prisma-client-js"
-  output   = "../../node_modules/.prisma/tenant-client"
+  provider      = "prisma-client-js"
+  output        = "../../node_modules/.prisma/tenant-client"
+  binaryTargets = ["native", "debian-openssl-3.0.x"]
 }
 
 datasource db {
