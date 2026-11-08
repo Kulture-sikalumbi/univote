@@ -306,16 +306,18 @@ function ElectionOptionsForm({
   election: Election;
   onSaved: () => void | Promise<void>;
 }) {
-  const [offices, setOffices] = useState((election.offices ?? []).map((office) => office.Name).join('\n'));
-  const [affiliations, setAffiliations] = useState((election.affiliations ?? []).map((item) => item.Name).join('\n'));
+  const savedOffices = (election.offices ?? []).map((office) => office.Name).join('\n');
+  const savedAffiliations = (election.affiliations ?? []).map((item) => item.Name).join('\n');
+  const [offices, setOffices] = useState(savedOffices);
+  const [affiliations, setAffiliations] = useState(savedAffiliations);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const canEdit = election.Status === 'DRAFT';
 
   useEffect(() => {
-    setOffices((election.offices ?? []).map((office) => office.Name).join('\n'));
-    setAffiliations((election.affiliations ?? []).map((item) => item.Name).join('\n'));
-  }, [election.ElectionID, election.offices, election.affiliations]);
+    setOffices(savedOffices);
+    setAffiliations(savedAffiliations);
+  }, [election.ElectionID, savedOffices, savedAffiliations]);
 
   async function saveOptions(e: React.FormEvent) {
     e.preventDefault();
