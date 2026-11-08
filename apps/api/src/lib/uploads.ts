@@ -4,7 +4,7 @@ import crypto from 'node:crypto';
 import multer from 'multer';
 import { getSupabaseAdmin, isSupabaseStorageConfigured, storageBucket } from './supabase';
 
-export const UPLOAD_ROOT = path.resolve(process.cwd(), 'uploads');
+export const UPLOAD_ROOT = path.resolve(process.env.UPLOAD_ROOT ?? path.join(process.cwd(), 'uploads'));
 
 const ALLOWED_MIME = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif']);
 const MAX_BYTES = 2 * 1024 * 1024; // 2 MB
@@ -106,8 +106,9 @@ export async function removeStoredImage(url: string | null | undefined): Promise
   try {
     if (url.startsWith('/uploads/')) {
       const relative = url.replace(/^\//, ''); // uploads/...
-      const absolute = path.resolve(process.cwd(), relative);
-      if (absolute.startsWith(UPLOAD_ROOT) && fs.existsSync(absolute)) {
+      const uploadRelative = relative.replace(/^uploads[\\/]/, '');
+      const absolute = path.resolve(UPLOAD_ROOT, uploadRelative);
+      if (absolute.startsWith(`${UPLOAD_ROOT}${path.sep}`) && fs.existsSync(absolute)) {
         fs.unlinkSync(absolute);
       }
       return;
