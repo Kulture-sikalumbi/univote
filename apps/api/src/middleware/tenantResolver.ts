@@ -11,6 +11,12 @@ function isPendingAllowed(req: Request): boolean {
 }
 
 export async function tenantResolver(req: Request, res: Response, next: NextFunction) {
+  // Only tenant-scoped API routes need a tenant code. Let the production SPA,
+  // health endpoints, and other non-API paths pass through to their handlers.
+  if (!req.path.startsWith('/api/v1/')) {
+    return next();
+  }
+
   const tenantCode = toInstitutionCode(req.header('X-Tenant-Code') ?? '');
 
   if (!tenantCode) {
