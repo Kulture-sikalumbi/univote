@@ -21,9 +21,19 @@ import { mockSisRouter } from './modules/eligibility/mockSis';
 
 export function createApp() {
   const app = express();
+  const imageSources = ["'self'", 'data:'];
+  const storageURL = process.env.SUPABASE_URL?.trim();
+  if (storageURL) {
+    imageSources.push(new URL(storageURL).origin);
+  }
 
   app.use(
     helmet({
+      contentSecurityPolicy: {
+        directives: {
+          imgSrc: imageSources,
+        },
+      },
       crossOriginResourcePolicy: { policy: 'cross-origin' },
     })
   );
