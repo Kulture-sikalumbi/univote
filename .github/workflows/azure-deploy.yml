@@ -67,6 +67,5 @@ jobs:
       - name: Deploy to Azure App Service
         if: ${{ !inputs.diagnose_only }}
         run: |
-          az webapp config appsettings set --resource-group work --name "${{ vars.AZURE_WEBAPP_NAME }}" --settings UPLOAD_ROOT=/home/uploads
           az webapp config set --resource-group work --name "${{ vars.AZURE_WEBAPP_NAME }}" --startup-file "node apps/api/dist/src/server.js"
           az webapp deploy --resource-group work --name "${{ vars.AZURE_WEBAPP_NAME }}" --src-path release.zip --type zip
