@@ -45,8 +45,22 @@ jobs:
       - name: Build API and web app
         run: npm run build
 
+      - name: Preserve generated Prisma clients
+        run: |
+          mkdir -p /tmp/generated-prisma
+          cp -a apps/api/node_modules/.prisma/public-client /tmp/generated-prisma/
+          cp -a apps/api/node_modules/.prisma/tenant-client /tmp/generated-prisma/
+
       - name: Remove development dependencies
         run: npm prune --omit=dev
+
+      - name: Restore and verify generated Prisma clients
+        run: |
+          mkdir -p apps/api/node_modules/.prisma
+          cp -a /tmp/generated-prisma/public-client apps/api/node_modules/.prisma/
+          cp -a /tmp/generated-prisma/tenant-client apps/api/node_modules/.prisma/
+          test -f apps/api/node_modules/.prisma/public-client/libquery_engine-debian-openssl-3.0.x.so.node
+          test -f apps/api/node_modules/.prisma/tenant-client/libquery_engine-debian-openssl-3.0.x.so.node
 
       - name: Create deployment package
         run: |
