@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: read
+  id-token: write
 
 env:
   NODE_VERSION: '22'
@@ -42,9 +43,12 @@ jobs:
         run: |
           zip -r release.zip apps/api/dist apps/api/package.json apps/web/dist node_modules package.json package-lock.json
 
-      - name: Deploy to Azure App Service
-        uses: azure/webapps-deploy@v3
+      - name: Sign in to Azure
+        uses: azure/login@v2
         with:
-          app-name: ${{ vars.AZURE_WEBAPP_NAME }}
-          publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }}
-          package: release.zip
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Deploy to Azure App Service
+        run: az webapp deploy --resource-group work --name "${{ vars.AZURE_WEBAPP_NAME }}" --src-path release.zip --type zip
