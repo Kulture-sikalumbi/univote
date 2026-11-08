@@ -20,7 +20,7 @@ Docker is optional. The App Service can run the compiled Node application
 using the startup command:
 
 ```text
-node apps/api/dist/server.js
+node apps/api/dist/src/server.js
 ```
 
 ## App Service settings
