@@ -9,7 +9,7 @@ import crypto from 'crypto';
 import { prisma } from '../../lib/prisma';
 import { getPrismaForTenant } from '../../lib/tenantPrisma';
 import { hashPassword } from '../../crypto/password';
-import { issueSessionToken, Role } from '../auth/jwt.service';
+import { issueSessionToken } from '../auth/jwt.service';
 import { generateTenantIdentity } from './tenantIdentity';
 
 export class SuperAdminError extends Error {
@@ -44,7 +44,7 @@ export async function loginSuperAdmin(username: string, password: string): Promi
     voterID: 'superadmin',
     tenantID: 'GLOBAL',
     tenantSchema: 'GLOBAL',
-    role: 'SUPER_ADMIN' as Role,
+    role: 'SUPER_ADMIN',
   });
 
   return { token };

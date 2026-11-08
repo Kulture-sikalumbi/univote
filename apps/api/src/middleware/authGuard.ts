@@ -2,14 +2,15 @@
 //
 // Verifies the Authorization: Bearer <token> header and enforces the two
 // token types described in Section 6.6:
-//   - 'SESSION' tokens (30 min TTL) for all authenticated, non-voting calls
-//   - 'BALLOT' tokens (15 min TTL, single-use) for the voting endpoints only
+//   - 'LOGIN' tokens are restricted to password setup and WebAuthn login.
+//   - 'SESSION' tokens are issued only after student WebAuthn verification.
+//   - 'BALLOT' tokens are election-scoped and single-use.
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 import { isTokenBlocked } from '../lib/tokenBlocklist';
-import { SessionPayload, BallotPayload, Role } from '../modules/auth/jwt.service';
+import { SessionPayload, LoginPayload, BallotPayload, Role } from '../modules/auth/jwt.service';
 
-type TokenKind = 'SESSION' | 'BALLOT';
+type TokenKind = 'SESSION' | 'LOGIN' | 'BALLOT';
 
 function getSecret(): string {
   const secret = process.env.JWT_SECRET;
@@ -27,8 +28,8 @@ export function authGuard(kind: TokenKind, allowedRoles?: Role[], allowPasswordS
     const token = header.slice('Bearer '.length);
 
     try {
-      const decoded = jwt.verify(token, getSecret()) as (SessionPayload | BallotPayload) & {
-        type?: 'BALLOT';
+      const decoded = jwt.verify(token, getSecret()) as (SessionPayload | LoginPayload | BallotPayload) & {
+        type?: 'LOGIN' | 'BALLOT';
         jti?: string;
       };
 
@@ -49,13 +50,28 @@ export function authGuard(kind: TokenKind, allowedRoles?: Role[], allowPasswordS
           return res.status(401).json({ error: 'Ballot token already used' });
         }
         req.ballot = decoded as BallotPayload;
+      } else if (kind === 'LOGIN') {
+        if (decoded.type !== 'LOGIN') {
+          return res.status(401).json({ error: 'Login token required' });
+        }
+        const login = decoded as LoginPayload;
+        if (allowedRoles && !allowedRoles.includes(login.role)) {
+          return res.status(403).json({ error: 'Insufficient role' });
+        }
+        if (login.mustChangePassword && !allowPasswordSetup) {
+          return res.status(403).json({ error: 'Set a new password before continuing' });
+        }
+        req.session = login;
       } else {
-        if ((decoded as BallotPayload).type === 'BALLOT') {
+        if (decoded.type) {
           return res.status(401).json({ error: 'Session token required' });
         }
         const session = decoded as SessionPayload;
         if (allowedRoles && !allowedRoles.includes(session.role)) {
           return res.status(403).json({ error: 'Insufficient role' });
+        }
+        if (session.role === 'STUDENT' && session.webauthnVerified !== true) {
+          return res.status(401).json({ error: 'WebAuthn verification required' });
         }
         if (session.mustChangePassword && !allowPasswordSetup) {
           return res.status(403).json({ error: 'Set a new password before continuing' });

@@ -37,10 +37,13 @@ function getOrigin(): string {
 export async function generateRegistrationChallenge(
   tenantSchema: string,
   voterID: string,
-  studentID: string
+  studentID: string,
+  excludeExistingCredentials = true
 ) {
   const db = await getPrismaForTenant(tenantSchema);
-  const existingCredentials = await db.credential.findMany({ where: { VoterID: voterID } });
+  const existingCredentials = excludeExistingCredentials
+    ? await db.credential.findMany({ where: { VoterID: voterID } })
+    : [];
 
   return generateRegistrationOptions({
     rpName: 'UniVote',
@@ -65,13 +68,15 @@ export async function verifyAndStoreCredential(
   tenantSchema: string,
   voterID: string,
   registrationResponse: Parameters<typeof verifyRegistrationResponse>[0]['response'],
-  expectedChallenge: string
+  expectedChallenge: string,
+  replaceExistingCredentials = false
 ): Promise<{ success: true }> {
   const verification = await verifyRegistrationResponse({
     response: registrationResponse,
     expectedChallenge,
     expectedOrigin: getOrigin(),
     expectedRPID: getRpID(),
+    requireUserVerification: true,
   });
 
   if (!verification.verified || !verification.registrationInfo) {
@@ -90,15 +95,23 @@ export async function verifyAndStoreCredential(
   const encryptedPublicKey = encryptData(publicKeyBase64);
 
   const db = await getPrismaForTenant(tenantSchema);
-  await db.credential.create({
-    data: {
-      CredentialID: credentialIDStr,
-      VoterID: voterID,
-      Salted_PublicKey_Hash: saltedHash,
-      Encrypted_PublicKey: encryptedPublicKey,
-      SignCount: BigInt(counter),
-    },
-  });
+  const data = {
+    CredentialID: credentialIDStr,
+    VoterID: voterID,
+    Salted_PublicKey_Hash: saltedHash,
+    Encrypted_PublicKey: encryptedPublicKey,
+    SignCount: BigInt(counter),
+  };
+  if (replaceExistingCredentials) {
+    await db.$transaction(async (transaction) => {
+      await transaction.credential.create({ data });
+      await transaction.credential.deleteMany({
+        where: { VoterID: voterID, CredentialID: { not: credentialIDStr } },
+      });
+    });
+  } else {
+    await db.credential.create({ data });
+  }
 
   return { success: true };
 }
@@ -150,6 +163,7 @@ export async function verifyBiometricAssertion(
     expectedChallenge,
     expectedOrigin: getOrigin(),
     expectedRPID: getRpID(),
+    requireUserVerification: true,
     authenticator: {
       credentialID: isoBase64URL.toBuffer(credential.CredentialID),
       credentialPublicKey: Buffer.from(publicKeyBase64, 'base64'),

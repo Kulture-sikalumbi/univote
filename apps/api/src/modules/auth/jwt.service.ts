@@ -1,21 +1,31 @@
 // src/modules/auth/jwt.service.ts
 //
-// Two token types (Section 6.6):
-//   SESSION — issued after credential login, 30 min TTL, used for all
-//             authenticated calls (eligibility check, elections, voters...).
-//   BALLOT  — issued after a successful biometric handshake, 15 min TTL,
+// Token types:
+//   LOGIN   — issued after the student's password, 10 min TTL, restricted
+//             to password setup and the required WebAuthn login step.
+//   SESSION — issued only after WebAuthn, 30 min TTL, used for authenticated
+//             non-voting calls (eligibility check, elections, voters...).
+//   BALLOT  — issued after a separate WebAuthn handshake, 15 min TTL,
 //             single-use (invalidated via the jti blocklist on cast).
 import crypto from 'crypto';
 import jwt from 'jsonwebtoken';
 
 export type Role = 'STUDENT' | 'SCHOOL_ADMIN' | 'SUPER_ADMIN';
 
-export interface SessionPayload {
+interface SessionClaims {
   voterID: string;
   tenantID: string;
   tenantSchema: string;
-  role: Role;
   mustChangePassword?: boolean;
+}
+
+export type SessionPayload =
+  | (SessionClaims & { role: 'STUDENT'; webauthnVerified: true })
+  | (SessionClaims & { role: 'SCHOOL_ADMIN' | 'SUPER_ADMIN'; webauthnVerified?: never });
+
+export interface LoginPayload extends SessionClaims {
+  role: 'STUDENT';
+  type: 'LOGIN';
 }
 
 export interface BallotPayload {
@@ -35,6 +45,12 @@ function getSecret(): string {
 
 export function issueSessionToken(payload: SessionPayload): string {
   return jwt.sign(payload, getSecret(), { expiresIn: '30m' });
+}
+
+export function issueLoginToken(payload: SessionClaims): string {
+  return jwt.sign({ ...payload, role: 'STUDENT' as const, type: 'LOGIN' as const }, getSecret(), {
+    expiresIn: '10m',
+  });
 }
 
 export function issueBallotToken(

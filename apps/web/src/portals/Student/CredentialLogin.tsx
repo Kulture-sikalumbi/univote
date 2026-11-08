@@ -14,8 +14,21 @@ import { Spinner } from '../../components/Spinner';
 import { TextField } from '../../components/TextField';
 import { api, ApiError } from '../../lib/api';
 import type { LoginResponse } from '../../lib/types';
+import {
+  authenticateBiometricCredential,
+  registerBiometricCredential,
+} from '../../lib/webauthn';
+import type {
+  PublicKeyCredentialCreationOptionsJSON,
+  PublicKeyCredentialRequestOptionsJSON,
+} from '@simplewebauthn/types';
 
 type Tab = 'student' | 'school-admin' | 'super-admin' | 'register-school';
+
+type StudentLoginFlow =
+  | { token: string; mode: 'change-password' | 'error' }
+  | { token: string; mode: 'authenticate'; options: PublicKeyCredentialRequestOptionsJSON }
+  | { token: string; mode: 'register'; options: PublicKeyCredentialCreationOptionsJSON };
 
 interface CredentialLoginProps {
   onLoggedIn: (token: string) => void;
@@ -100,15 +113,53 @@ function TabButton({
 }
 
 function errorMessage(err: unknown, fallback: string): string {
-  return err instanceof ApiError ? err.message : fallback;
+  return err instanceof Error ? err.message : fallback;
 }
 
 function StudentLoginForm({ onLoggedIn }: CredentialLoginProps) {
   const [tenantCode, setTenantCode] = useState(() => api.getTenantCode());
   const [studentID, setStudentID] = useState('');
   const [password, setPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [loginFlow, setLoginFlow] = useState<StudentLoginFlow | null>(null);
+
+  async function prepareDeviceVerification(token: string, register = false, clearError = true) {
+    setLoading(true);
+    if (clearError) setError(null);
+    try {
+      if (register) {
+        const options = await api.post<PublicKeyCredentialCreationOptionsJSON>(
+          '/auth/webauthn/session/register/begin',
+          undefined,
+          token
+        );
+        setLoginFlow({ token, mode: 'register', options });
+        return;
+      }
+
+      try {
+        const options = await api.post<PublicKeyCredentialRequestOptionsJSON>(
+          '/auth/webauthn/session/login/begin',
+          undefined,
+          token
+        );
+        setLoginFlow({ token, mode: 'authenticate', options });
+      } catch (err) {
+        if (!(err instanceof ApiError) || !err.message.includes('No biometric credential')) {
+          throw err;
+        }
+        await prepareDeviceVerification(token, true);
+      }
+    } catch (err) {
+      setError(errorMessage(err, 'Could not prepare device verification. Please try again.'));
+      setLoginFlow({ token, mode: 'error' });
+    } finally {
+      setLoading(false);
+    }
+  }
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
@@ -117,12 +168,165 @@ function StudentLoginForm({ onLoggedIn }: CredentialLoginProps) {
     try {
       api.setTenantCode(tenantCode);
       const result = await api.post<LoginResponse>('/auth/login', { studentID, password });
-      onLoggedIn(result.token);
+      setPassword('');
+      if (result.mustChangePassword) {
+        setLoginFlow({ token: result.token, mode: 'change-password' });
+      } else {
+        await prepareDeviceVerification(result.token);
+      }
     } catch (err) {
       setError(errorMessage(err, 'Something went wrong. Please try again.'));
     } finally {
       setLoading(false);
     }
+  }
+
+  async function saveNewPassword(event: FormEvent) {
+    event.preventDefault();
+    if (!loginFlow) return;
+    setError(null);
+    if (newPassword !== confirmPassword) {
+      setError('The passwords do not match.');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const result = await api.post<{ token: string }>(
+        '/auth/change-password',
+        { newPassword },
+        loginFlow.token
+      );
+      setNewPassword('');
+      setConfirmPassword('');
+      await prepareDeviceVerification(result.token);
+    } catch (err) {
+      setError(errorMessage(err, 'Could not update your password. Please try again.'));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function refreshDeviceOptions() {
+    if (!loginFlow || loginFlow.mode === 'change-password') return;
+    await prepareDeviceVerification(loginFlow.token, loginFlow.mode === 'register');
+  }
+
+  async function completeDeviceVerification() {
+    if (!loginFlow || (loginFlow.mode !== 'authenticate' && loginFlow.mode !== 'register')) return;
+
+    setError(null);
+    setLoading(true);
+    try {
+      if (loginFlow.mode === 'authenticate') {
+        const assertionPromise = authenticateBiometricCredential(loginFlow.options);
+        const credential = await assertionPromise;
+        const result = await api.post<{ token: string }>(
+          '/auth/webauthn/session/login/complete',
+          { credential },
+          loginFlow.token
+        );
+        onLoggedIn(result.token);
+      } else {
+        const attestationPromise = registerBiometricCredential(loginFlow.options);
+        const credential = await attestationPromise;
+        const result = await api.post<{ token: string }>(
+          '/auth/webauthn/session/register/complete',
+          { credential },
+          loginFlow.token
+        );
+        onLoggedIn(result.token);
+      }
+    } catch (err) {
+      setError(errorMessage(err, 'Device verification failed. Please try again.'));
+      await prepareDeviceVerification(loginFlow.token, loginFlow.mode === 'register', false);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  if (loginFlow) {
+    return (
+      <div className="space-y-4">
+        {error && <Alert variant="error">{error}</Alert>}
+        {loginFlow.mode === 'change-password' ? (
+          <>
+            <div>
+              <h2 className="text-sm font-semibold text-gray-800">Set your password</h2>
+              <p className="mt-1 text-xs text-gray-500">
+                Choose a private password before verifying your device.
+              </p>
+            </div>
+            <form onSubmit={saveNewPassword} className="space-y-3">
+              <TextField
+                label="New password"
+                name="newPassword"
+                type="password"
+                autoComplete="new-password"
+                minLength={8}
+                required
+                value={newPassword}
+                onChange={(event) => setNewPassword(event.target.value)}
+              />
+              <TextField
+                label="Confirm new password"
+                name="confirmPassword"
+                type="password"
+                autoComplete="new-password"
+                minLength={8}
+                required
+                value={confirmPassword}
+                onChange={(event) => setConfirmPassword(event.target.value)}
+              />
+              <Button type="submit" fullWidth disabled={loading}>
+                {loading ? <Spinner label="Updating password…" /> : 'Save password'}
+              </Button>
+            </form>
+          </>
+        ) : loginFlow.mode === 'authenticate' ? (
+          <>
+            <div>
+              <h2 className="text-sm font-semibold text-gray-800">Verify your identity</h2>
+              <p className="mt-1 text-xs text-gray-500">
+                Confirm with your device’s biometric, passkey, or screen-lock security to finish signing in.
+              </p>
+            </div>
+            <Button fullWidth disabled={loading || !loginFlow.options} onClick={completeDeviceVerification}>
+              {loading ? <Spinner label="Waiting for device verification…" /> : 'Continue with device security'}
+            </Button>
+          </>
+        ) : loginFlow.mode === 'register' ? (
+          <>
+            <div>
+              <h2 className="text-sm font-semibold text-gray-800">Set up device security</h2>
+              <p className="mt-1 text-xs text-gray-500">
+                Register this device’s biometric, passkey, or screen-lock security to finish signing in.
+              </p>
+            </div>
+            <Button fullWidth disabled={loading || !loginFlow.options} onClick={completeDeviceVerification}>
+              {loading ? <Spinner label="Waiting for device setup…" /> : 'Set up device security'}
+            </Button>
+          </>
+        ) : (
+          <div className="space-y-3">
+            {!error && <Spinner label="Preparing device verification…" />}
+            <Button variant="secondary" fullWidth disabled={loading} onClick={refreshDeviceOptions}>
+              {loading ? <Spinner label="Preparing…" /> : 'Try again'}
+            </Button>
+          </div>
+        )}
+        <button
+          type="button"
+          className="w-full text-center text-xs text-gray-500 underline hover:text-gray-700"
+          onClick={() => {
+            setLoginFlow(null);
+            setError(null);
+          }}
+        >
+          Return to sign in
+        </button>
+      </div>
+    );
   }
 
   return (

@@ -1,12 +1,8 @@
 // src/modules/auth/auth.routes.ts
 //
-// Implements the Authentication API (Section 7) and the exact client
-// sequence documented in Section 9's "Student Voter Flow":
-//   CREDENTIAL_LOGIN -> ELIGIBILITY_CHECK (see eligibility.routes.ts)
-//   -> BIOMETRIC_HANDSHAKE (register once, then login every time)
-// A session token (issued by /login) only proves password knowledge; the
-// webauthn/login/complete endpoint is the only place a BALLOT token is
-// minted, and only after a verified biometric assertion.
+// Student sign-in requires password verification followed by WebAuthn before
+// a normal session token is issued. A later WebAuthn assertion, after
+// eligibility checks, is still required to mint an election-scoped BALLOT token.
 import { Router } from 'express';
 import { authGuard } from '../../middleware/authGuard';
 import { authRateLimiter } from '../../middleware/rateLimiter';
@@ -14,7 +10,7 @@ import { prisma } from '../../lib/prisma';
 import { getPrismaForTenant } from '../../lib/tenantPrisma';
 import { consumeChallenge, saveChallenge } from '../../lib/challengeStore';
 import { AuthError, changeVoterPassword, loginSchoolAdmin, loginVoter } from './auth.service';
-import { issueBallotToken } from './jwt.service';
+import { issueBallotToken, issueSessionToken } from './jwt.service';
 import { checkEligibility } from '../eligibility/eligibility.service';
 import {
   generateAuthenticationChallenge,
@@ -50,7 +46,7 @@ authRouter.post('/admin/login', authRateLimiter, async (req, res, next) => {
   }
 });
 
-authRouter.post('/change-password', authGuard('SESSION', ['STUDENT'], true), async (req, res, next) => {
+authRouter.post('/change-password', authGuard('LOGIN', ['STUDENT'], true), async (req, res, next) => {
   try {
     const { voterID, tenantID, tenantSchema } = req.session!;
     const { newPassword } = req.body ?? {};
@@ -60,6 +56,114 @@ authRouter.post('/change-password', authGuard('SESSION', ['STUDENT'], true), asy
     next(err);
   }
 });
+
+authRouter.post('/webauthn/session/login/begin', authGuard('LOGIN', ['STUDENT']), async (req, res, next) => {
+  try {
+    const { voterID, tenantSchema } = req.session!;
+    const options = await generateAuthenticationChallenge(tenantSchema, voterID);
+    saveChallenge(voterID, 'authenticate', options.challenge);
+    res.json(options);
+  } catch (err) {
+    next(err);
+  }
+});
+
+authRouter.post('/webauthn/session/login/complete', authGuard('LOGIN', ['STUDENT']), async (req, res, next) => {
+  try {
+    const { voterID, tenantID, tenantSchema } = req.session!;
+    const challenge = consumeChallenge(voterID, 'authenticate');
+    if (!challenge) {
+      return res.status(400).json({ error: 'Authentication challenge expired or not found. Please retry.' });
+    }
+
+    await verifyBiometricAssertion(tenantSchema, voterID, req.body?.credential, challenge);
+    const token = issueSessionToken({
+      voterID,
+      tenantID,
+      tenantSchema,
+      role: 'STUDENT',
+      webauthnVerified: true,
+      mustChangePassword: false,
+    });
+    res.json({ token });
+  } catch (err) {
+    next(err);
+  }
+});
+
+authRouter.post('/webauthn/session/register/begin', authGuard('LOGIN', ['STUDENT']), async (req, res, next) => {
+  try {
+    const { voterID, tenantSchema } = req.session!;
+    const db = await getPrismaForTenant(tenantSchema);
+    const voter = await db.voter.findUniqueOrThrow({ where: { VoterID: voterID } });
+
+    const options = await generateRegistrationChallenge(tenantSchema, voterID, voter.StudentID);
+    saveChallenge(voterID, 'register', options.challenge);
+    res.json(options);
+  } catch (err) {
+    next(err);
+  }
+});
+
+authRouter.post(
+  '/webauthn/session/register/complete',
+  authGuard('LOGIN', ['STUDENT']),
+  async (req, res, next) => {
+    try {
+      const { voterID, tenantID, tenantSchema } = req.session!;
+      const challenge = consumeChallenge(voterID, 'register');
+      if (!challenge) {
+        return res.status(400).json({ error: 'Registration challenge expired or not found. Please retry.' });
+      }
+
+      await verifyAndStoreCredential(tenantSchema, voterID, req.body?.credential, challenge);
+      const token = issueSessionToken({
+        voterID,
+        tenantID,
+        tenantSchema,
+        role: 'STUDENT',
+        webauthnVerified: true,
+        mustChangePassword: false,
+      });
+      res.json({ token });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+authRouter.post('/webauthn/device/replace/begin', authGuard('SESSION', ['STUDENT']), async (req, res, next) => {
+  try {
+    const { voterID, tenantSchema } = req.session!;
+    const db = await getPrismaForTenant(tenantSchema);
+    const voter = await db.voter.findUniqueOrThrow({ where: { VoterID: voterID } });
+
+    const options = await generateRegistrationChallenge(tenantSchema, voterID, voter.StudentID, false);
+    saveChallenge(voterID, 'replace', options.challenge);
+    res.json(options);
+  } catch (err) {
+    next(err);
+  }
+});
+
+authRouter.post(
+  '/webauthn/device/replace/complete',
+  authGuard('SESSION', ['STUDENT']),
+  async (req, res, next) => {
+    try {
+      const { voterID, tenantSchema } = req.session!;
+      const challenge = consumeChallenge(voterID, 'replace');
+      if (!challenge) {
+        return res.status(400).json({ error: 'Device replacement challenge expired or not found. Please retry.' });
+      }
+
+      await verifyAndStoreCredential(tenantSchema, voterID, req.body?.credential, challenge, true);
+      res.json({ success: true });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
 
 authRouter.post('/webauthn/register/begin', authGuard('SESSION', ['STUDENT']), async (req, res, next) => {
   try {

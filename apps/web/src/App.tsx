@@ -7,6 +7,7 @@ import { mediaUrl } from './lib/media';
 import { CredentialLogin } from './portals/Student/CredentialLogin';
 import { SetStudentPassword } from './portals/Student/SetStudentPassword';
 import { StudentPortal } from './portals/Student/StudentPortal';
+import { StudentSecuritySettings } from './portals/Student/StudentSecuritySettings';
 import { SchoolAdminPortal } from './portals/SchoolAdmin/SchoolAdminPortal';
 import { SuperAdminPortal } from './portals/SuperAdmin/SuperAdminPortal';
 
@@ -41,6 +42,16 @@ export default function App() {
               ) : (
                 <StudentPortal token={auth.token!} voterID={auth.voterID!} />
               )}
+            </Shell>
+          </RequireRole>
+        }
+      />
+      <Route
+        path="/student/security"
+        element={
+          <RequireRole auth={auth} role="STUDENT">
+            <Shell auth={auth}>
+              <StudentSecuritySettings token={auth.token!} />
             </Shell>
           </RequireRole>
         }
@@ -209,6 +220,11 @@ function Shell({ auth, children }: { auth: ReturnType<typeof useAuth>; children:
           </div>
         </div>
         <div className="flex items-center gap-3 text-sm text-gray-600">
+          {auth.role === 'STUDENT' && !auth.mustChangePassword && (
+            <Link to="/student/security" className="text-xs font-medium text-primary underline">
+              Change device security
+            </Link>
+          )}
           <span className="rounded-full bg-primary/10 px-3 py-1 text-xs font-medium text-primary">{auth.role}</span>
           <Button variant="secondary" onClick={auth.logout}>
             Log out

@@ -3,6 +3,7 @@
 export interface LoginResponse {
   token: string;
   voterID: string;
+  mustChangePassword: boolean;
 }
 
 export type EligibilityReasonCode =

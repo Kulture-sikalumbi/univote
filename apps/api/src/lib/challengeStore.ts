@@ -12,15 +12,17 @@ interface ChallengeEntry {
 const TTL_MS = 5 * 60 * 1000; // 5 minutes
 const store = new Map<string, ChallengeEntry>();
 
-function key(voterID: string, purpose: 'register' | 'authenticate'): string {
+type ChallengePurpose = 'register' | 'authenticate' | 'replace';
+
+function key(voterID: string, purpose: ChallengePurpose): string {
   return `${purpose}:${voterID}`;
 }
 
-export function saveChallenge(voterID: string, purpose: 'register' | 'authenticate', challenge: string): void {
+export function saveChallenge(voterID: string, purpose: ChallengePurpose, challenge: string): void {
   store.set(key(voterID, purpose), { challenge, expiresAt: Date.now() + TTL_MS });
 }
 
-export function consumeChallenge(voterID: string, purpose: 'register' | 'authenticate'): string | null {
+export function consumeChallenge(voterID: string, purpose: ChallengePurpose): string | null {
   const k = key(voterID, purpose);
   const entry = store.get(k);
   store.delete(k);

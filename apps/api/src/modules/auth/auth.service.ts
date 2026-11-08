@@ -1,14 +1,10 @@
 // src/modules/auth/auth.service.ts
 //
-// Credential (StudentID + password) auth for the Student and School Admin
-// portals. This is "factor one" of the two-factor flow described in
-// Section 9: CREDENTIAL_LOGIN happens before ELIGIBILITY_CHECK and the
-// biometric handshake. A session JWT issued here only proves "this person
-// knows the account's password" — it does not authorize voting; only a
-// BALLOT token (issued after the WebAuthn handshake) does that.
+// Student passwords issue a restricted login token; a full student session
+// is issued only after WebAuthn verification.
 import { getPrismaForTenant } from '../../lib/tenantPrisma';
 import { hashPassword, verifyPassword } from '../../crypto/password';
-import { issueSessionToken, Role } from './jwt.service';
+import { issueLoginToken, issueSessionToken } from './jwt.service';
 
 export class AuthError extends Error {
   status: number;
@@ -22,6 +18,7 @@ export class AuthError extends Error {
 export interface LoginResult {
   token: string;
   voterID: string;
+  mustChangePassword: boolean;
 }
 
 /** Student credential login -> session token (role STUDENT). */
@@ -46,15 +43,14 @@ export async function loginVoter(
     throw new AuthError('Invalid Student ID or password');
   }
 
-  const token = issueSessionToken({
+  const token = issueLoginToken({
     voterID: voter.VoterID,
     tenantID,
     tenantSchema,
-    role: 'STUDENT',
     mustChangePassword: voter.MustChangePassword,
   });
 
-  return { token, voterID: voter.VoterID };
+  return { token, voterID: voter.VoterID, mustChangePassword: voter.MustChangePassword };
 }
 
 /** Set a voter's permanent password after a first login with a temporary one. */
@@ -80,7 +76,7 @@ export async function changeVoterPassword(
   });
 
   return {
-    token: issueSessionToken({ voterID, tenantID, tenantSchema, role: 'STUDENT', mustChangePassword: false }),
+    token: issueLoginToken({ voterID, tenantID, tenantSchema, mustChangePassword: false }),
   };
 }
 
@@ -113,7 +109,7 @@ export async function loginSchoolAdmin(
     voterID: admin.AdminID,
     tenantID,
     tenantSchema,
-    role: 'SCHOOL_ADMIN' as Role,
+    role: 'SCHOOL_ADMIN',
   });
 
   return { token, adminID: admin.AdminID };
