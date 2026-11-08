@@ -314,11 +314,6 @@ function ElectionOptionsForm({
   const [error, setError] = useState<string | null>(null);
   const canEdit = election.Status === 'DRAFT';
 
-  useEffect(() => {
-    setOffices(savedOffices);
-    setAffiliations(savedAffiliations);
-  }, [election.ElectionID, savedOffices, savedAffiliations]);
-
   async function saveOptions(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
